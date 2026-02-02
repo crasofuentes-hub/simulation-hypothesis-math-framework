@@ -1,7 +1,6 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Optional, Tuple
 
 import numpy as np
 
@@ -77,7 +76,7 @@ class StochasticBranchingModel:
         c_d = self.compute_budget_at_depth(depth)
         return float(self.alpha * c_d / self.cost_scale)
 
-    def simulate_once(self, max_depth: int, seed: Optional[int] = None) -> Dict[str, np.ndarray]:
+    def simulate_once(self, max_depth: int, seed: int | None = None) -> dict[str, np.ndarray]:
         """
         Simulate one branching tree realization up to max_depth.
 
@@ -105,12 +104,12 @@ class StochasticBranchingModel:
             branching[:-1] = rng.poisson(lambdas[:-1])
             branching[-1] = 0
 
-        N = np.zeros(max_depth + 1, dtype=np.int64)
+        N = np.zeros(max_depth + 1, dtype=np.int64)  # noqa: N806
         N[0] = 1
         for d in range(0, max_depth):
             N[d + 1] = N[d] * int(branching[d])
 
-        W = N.astype(float) * budgets
+        W = N.astype(float) * budgets  # noqa: N806
 
         return {
             "depth": depth,
@@ -126,7 +125,7 @@ class StochasticBranchingModel:
         max_depth: int,
         n_trials: int,
         seed: int = 0,
-    ) -> Dict[str, np.ndarray]:
+    ) -> dict[str, np.ndarray]:
         """
         Monte Carlo over branching realizations. Reproducible with seed.
 
@@ -136,14 +135,14 @@ class StochasticBranchingModel:
         """
         if n_trials <= 0:
             raise ValueError("n_trials must be > 0.")
-        Ns = []
-        Ws = []
+        Ns = []  # noqa: N806
+        Ws = []  # noqa: N806
         for i in range(n_trials):
             out = self.simulate_once(max_depth=max_depth, seed=int(seed) + i)
             Ns.append(out["N"].astype(float))
             Ws.append(out["W"].astype(float))
-        Nmat = np.vstack(Ns)
-        Wmat = np.vstack(Ws)
+        Nmat = np.vstack(Ns)  # noqa: N806
+        Wmat = np.vstack(Ws)  # noqa: N806
 
         return {
             "depth": np.arange(0, max_depth + 1, dtype=int),
@@ -158,7 +157,7 @@ class StochasticBranchingModel:
         max_depth: int,
         n_trials: int,
         seed: int = 0,
-    ) -> Tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray]:
         """
         Compute a depth distribution P(d) per trial using W_d / sum W, then return (mean, std).
 
@@ -171,13 +170,13 @@ class StochasticBranchingModel:
         ps = []
         for i in range(n_trials):
             out = self.simulate_once(max_depth=max_depth, seed=int(seed) + i)
-            W = out["W"].astype(float)
+            W = out["W"].astype(float)  # noqa: N806
             s = float(W.sum())
             if s <= 0:
                 ps.append(np.zeros_like(W))
             else:
                 ps.append(W / s)
-        P = np.vstack(ps)
+        P = np.vstack(ps)  # noqa: N806
         p_mean = P.mean(axis=0)
         p_std = P.std(axis=0, ddof=1) if n_trials > 1 else np.zeros(max_depth + 1)
         return p_mean, p_std
