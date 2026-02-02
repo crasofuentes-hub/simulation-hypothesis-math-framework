@@ -154,7 +154,7 @@ def empirical_p_value(
 
 def bh_fdr(pvals: Iterable[float], alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
     """
-    BenjaminiÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œHochberg FDR procedure.
+    BenjaminiÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“Hochberg FDR procedure.
 
     Returns
     -------
@@ -304,7 +304,7 @@ def spectral_peak_pvals_under_null(
 
 def benjamini_hochberg(pvals: np.ndarray, alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
     """
-    Benjamini–Hochberg FDR control.
+    Benjaminiâ€“Hochberg FDR control.
 
     This is a stable public alias expected by the test suite.
     Returns:
@@ -317,3 +317,110 @@ def benjamini_hochberg(pvals: np.ndarray, alpha: float = 0.05) -> tuple[np.ndarr
     if not (0.0 < alpha < 1.0):
         raise ValueError("alpha must be in (0,1).")
     return bh_fdr(pvals, alpha=alpha)
+
+@dataclass(frozen=True)
+class DetectionResult:
+    idxs: np.ndarray
+    z_obs: np.ndarray
+    pvals: np.ndarray
+    qvals: np.ndarray
+    reject: np.ndarray
+    null_z: np.ndarray
+
+
+def _null_surrogates(
+    x: np.ndarray,
+    n_null: int,
+    null_model: NullModel,
+    seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(int(seed))
+    x = np.asarray(x, dtype=float)
+
+    if n_null <= 0:
+        raise ValueError("n_null must be > 0.")
+
+    if null_model == NullModel.GAUSSIAN:
+        mu = float(np.mean(x))
+        sigma = float(np.std(x, ddof=1)) if x.size > 1 else 0.0
+        if sigma <= 0:
+            # Degenerate: all surrogates equal -> zscores are all identical
+            return np.tile(np.full_like(x, mu, dtype=float), (n_null, 1))
+        return rng.normal(loc=mu, scale=sigma, size=(n_null, x.size)).astype(float)
+
+    if null_model == NullModel.PHASE_RANDOMIZED:
+        # Phase randomization: preserve rFFT magnitude, randomize phases, inverse rFFT.
+        X = np.fft.rfft(x)
+        mag = np.abs(X)
+        out = np.zeros((n_null, x.size), dtype=float)
+        for i in range(n_null):
+            phase = rng.uniform(0.0, 2.0 * np.pi, size=mag.size)
+            phase[0] = 0.0
+            if mag.size > 1:
+                phase[-1] = 0.0
+            Xn = mag * np.exp(1j * phase)
+            out[i, :] = np.fft.irfft(Xn, n=x.size)
+        return out
+
+    raise ValueError(f"Unknown null_model: {null_model!r}")
+
+
+def detect_spectral_artifacts(
+    x: np.ndarray,
+    freq_indices: Iterable[int] | None = None,
+    *,
+    null_model: NullModel = NullModel.PHASE_RANDOMIZED,
+    n_null: int = 256,
+    alpha: float = 0.05,
+    seed: int = 0,
+) -> DetectionResult:
+    """
+    Detect candidate spectral artifacts using a null model + empirical p-values + BH-FDR.
+
+    Procedure:
+    1) Compute z-score statistic at each target frequency index (spectral_peak_zscore).
+    2) Generate null surrogates under 
+ull_model.
+    3) Compute empirical one-sided p-values (greater).
+    4) Apply Benjamini–Hochberg FDR control at level lpha.
+
+    Returns a DetectionResult with (idxs, z_obs, pvals, qvals, reject, null_z).
+    """
+    x = np.asarray(x, dtype=float)
+    if x.ndim != 1:
+        raise ValueError("x must be a 1D array.")
+    if x.size < 8:
+        raise ValueError("x must have at least 8 samples for meaningful spectral testing.")
+    if not (0.0 < alpha < 1.0):
+        raise ValueError("alpha must be in (0,1).")
+
+    # Default: test a compact set of low-to-mid bins (skip DC at 0)
+    if freq_indices is None:
+        # Use a conservative set: 1..min(16, n_bins-1)
+        n_bins = np.fft.rfft(x).size
+        hi = min(16, n_bins - 1)
+        idxs = np.arange(1, hi + 1, dtype=int)
+    else:
+        idxs = np.asarray(list(freq_indices), dtype=int)
+        if idxs.size == 0:
+            raise ValueError("freq_indices must be non-empty.")
+        if np.any(idxs < 0):
+            raise ValueError("freq_indices must be >= 0.")
+
+    # Observed statistics
+    z_obs = np.asarray([spectral_peak_zscore(x, int(i)) for i in idxs], dtype=float)
+
+    # Null distribution
+    sur = _null_surrogates(x=x, n_null=int(n_null), null_model=null_model, seed=int(seed))
+    null_z = np.zeros((idxs.size, int(n_null)), dtype=float)
+    for j in range(int(n_null)):
+        null_z[:, j] = np.asarray([spectral_peak_zscore(sur[j, :], int(i)) for i in idxs], dtype=float)
+
+    # Empirical p-values (one-sided greater)
+    pvals = np.asarray(
+        [empirical_p_value(z_obs[i], null_z[i, :], alternative="greater") for i in range(idxs.size)],
+        dtype=float,
+    )
+
+    reject, qvals = benjamini_hochberg(pvals, alpha=float(alpha))
+    return DetectionResult(idxs=idxs, z_obs=z_obs, pvals=pvals, qvals=qvals, reject=reject, null_z=null_z)
