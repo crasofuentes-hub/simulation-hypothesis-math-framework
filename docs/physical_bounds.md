@@ -1,4 +1,4 @@
-﻿# Physical Bounds
+# Physical Bounds
 
 This section summarizes canonical constraints on computation that are relevant to any simulator implemented
 in known physics.
@@ -56,3 +56,6 @@ Planned extension (paper-grade):
 - add citations and constant provenance,
 - add derived examples with conservative uncertainty bounds.
 
+---
+## References
+See ../REFERENCES.md and eferences.bib (BibTeX).
