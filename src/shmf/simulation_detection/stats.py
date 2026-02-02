@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+
+def _clamp01(p: float) -> float:
+    # Numerical safety: keep within [0,1]
+    if p < 0.0:
+        return 0.0
+    if p > 1.0:
+        return 1.0
+    return float(p)
 from collections.abc import Iterable
 from dataclasses import dataclass
-
 import numpy as np
+from scipy.special import erfc, erfcinv
 from scipy.stats import norm
 
 
@@ -133,7 +141,7 @@ def empirical_p_value(
 
 def bh_fdr(pvals: Iterable[float], alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
     """
-    Benjamini–Hochberg FDR procedure.
+    Benjaminiâ€“Hochberg FDR procedure.
 
     Returns
     -------
