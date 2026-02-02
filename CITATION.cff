@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+title: "Simulation Hypothesis Math Framework (SHMF)"
+message: "If you use this software, please cite it."
+type: software
+authors:
+  - family-names: Fuentes Fernandez
+    given-names: Oscar
+version: 1.0.0
+license: MIT
