@@ -154,7 +154,7 @@ def empirical_p_value(
 
 def bh_fdr(pvals: Iterable[float], alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
     """
-    BenjaminiÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Hochberg FDR procedure.
+    BenjaminiÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œHochberg FDR procedure.
 
     Returns
     -------
@@ -301,3 +301,19 @@ def spectral_peak_pvals_under_null(
 
     rejected, qvals = bh_fdr(pvals, alpha=float(alpha))
     return pvals, rejected, qvals
+
+def benjamini_hochberg(pvals: np.ndarray, alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Benjamini–Hochberg FDR control.
+
+    This is a stable public alias expected by the test suite.
+    Returns:
+      reject: boolean array of hypotheses rejected at FDR level alpha
+      qvals:  BH-adjusted p-values (monotone, in [0,1])
+    """
+    pvals = np.asarray(pvals, dtype=float)
+    if pvals.ndim != 1:
+        raise ValueError("pvals must be a 1D array.")
+    if not (0.0 < alpha < 1.0):
+        raise ValueError("alpha must be in (0,1).")
+    return bh_fdr(pvals, alpha=alpha)
