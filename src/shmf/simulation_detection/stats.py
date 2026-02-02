@@ -2,28 +2,39 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from enum import Enum
 
 import numpy as np
 from scipy.stats import norm
 
+# -----------------------------
+# Public API expected by tests
+# -----------------------------
 
-class NullModel(str, Enum):
-    """Null models used for artifact detection."""
+@dataclass(frozen=True)
+class NullModel:
+    """
+    Test-facing null model wrapper.
 
-    GAUSSIAN = "gaussian"
-    PHASE_RANDOMIZED = "phase_randomized"
+    Tests expect: NullModel(kind="phase_randomized")
+    """
+    kind: str = "phase_randomized"
+
+    def __post_init__(self) -> None:
+        k = str(self.kind).strip().lower()
+        object.__setattr__(self, "kind", k)
+        if k not in {"gaussian", "phase_randomized"}:
+            raise ValueError("NullModel.kind must be 'gaussian' or 'phase_randomized'.")
 
 
 def spectral_peak_zscore(x: np.ndarray, freq_index: int | None = None) -> float:
     """
     Lightweight spectral-peak z-score.
 
-    We compute power spectrum via rFFT, then z-score either:
-    - the chosen bin `freq_index`, or
-    - the max over bins 1..end (excluding DC) if freq_index is None.
+    Compute rFFT power spectrum and z-score either:
+      - bin `freq_index` (if provided), or
+      - the max over bins 1..end (excluding DC) if freq_index is None.
 
-    Returns a scalar z-score.
+    Returns a scalar float.
     """
     x = np.asarray(x, dtype=float)
     if x.ndim != 1 or x.size < 8:
@@ -33,16 +44,15 @@ def spectral_peak_zscore(x: np.ndarray, freq_index: int | None = None) -> float:
     power = (np.abs(x_fft) ** 2).astype(float)
 
     if power.size <= 1:
-        return 0.0  # degenerate
+        return 0.0
 
-    # Exclude DC
-    bins = power[1:]
+    bins = power[1:]  # exclude DC
     if bins.size == 0:
         return 0.0
 
     mu = float(bins.mean())
     sd = float(bins.std(ddof=1)) if bins.size > 1 else 0.0
-    if sd <= 0:
+    if sd <= 0.0:
         return 0.0
 
     if freq_index is None:
@@ -52,24 +62,27 @@ def spectral_peak_zscore(x: np.ndarray, freq_index: int | None = None) -> float:
         if idx < 0 or idx >= power.size:
             raise ValueError("freq_index out of range for rFFT bins.")
         if idx == 0:
-            # DC explicitly discouraged; treat as not-an-artifact here
-            val = float(mu)
+            val = mu
         else:
             val = float(power[idx])
 
     return float((val - mu) / sd)
 
 
-def zscore_to_p_two_sided(z: float) -> float:
-    """Two-sided p-value from z using SciPy's normal survival function."""
-    z = float(z)
-    p = 2.0 * float(norm.sf(abs(z)))
-    # Clamp strictly into [0,1]
-    if p < 0.0:
-        return 0.0
-    if p > 1.0:
-        return 1.0
-    return float(p)
+def zscore_to_p_two_sided(z: float | np.ndarray) -> float | np.ndarray:
+    """
+    Two-sided p-value from z.
+
+    Tests call this with an array, so this is vectorized.
+    """
+    z_arr = np.asarray(z, dtype=float)
+    p = 2.0 * norm.sf(np.abs(z_arr))
+    p = np.clip(p, 0.0, 1.0)
+
+    # Preserve scalar-in/scalar-out behavior
+    if np.ndim(z) == 0:
+        return float(p)
+    return np.asarray(p, dtype=float)
 
 
 def empirical_p_value(
@@ -80,22 +93,22 @@ def empirical_p_value(
 ) -> float:
     """
     Empirical p-value with +1 smoothing:
-        p = (count_more_extreme + 1) / (n + 1)
+      p = (k + 1) / (n + 1)
 
-    Ensures p in (0,1], avoids 0 and avoids >1.
+    Guarantees p in (0, 1].
     """
     null_z = np.asarray(null_z, dtype=float)
     if null_z.ndim != 1 or null_z.size == 0:
         raise ValueError("null_z must be a non-empty 1D array.")
 
     z = float(z_obs)
-    alt = str(alternative).lower().strip()
+    alt = str(alternative).strip().lower()
 
     if alt == "greater":
         k = int(np.sum(null_z >= z))
     elif alt == "less":
         k = int(np.sum(null_z <= z))
-    elif alt in ("two-sided", "two_sided", "two sided"):
+    elif alt in {"two-sided", "two_sided", "two sided"}:
         k = int(np.sum(np.abs(null_z) >= abs(z)))
     else:
         raise ValueError("alternative must be 'greater', 'less', or 'two-sided'.")
@@ -103,7 +116,7 @@ def empirical_p_value(
     n = int(null_z.size)
     p = (k + 1.0) / (n + 1.0)
 
-    # numeric guard
+    # Hard clamp for numerical safety
     if p <= 0.0:
         return 1.0 / (n + 1.0)
     if p > 1.0:
@@ -111,99 +124,97 @@ def empirical_p_value(
     return float(p)
 
 
-def benjamini_hochberg(pvals: Iterable[float], alpha: float = 0.05) -> tuple[list[bool], np.ndarray]:
+def benjamini_hochberg(pvals: np.ndarray, alpha: float = 0.05) -> np.ndarray:
     """
-    Benjamini–Hochberg (BH) FDR procedure.
+    BH-FDR rejection mask ONLY.
 
-    Returns:
-      reject: list[bool]  (python bools to satisfy tests using `is True/False`)
-      qvals : np.ndarray  (BH-adjusted q-values, same order as input)
+    Tests expect:
+      rej = benjamini_hochberg(...)
+      assert rej.dtype == bool
     """
     if not (0.0 < float(alpha) < 1.0):
         raise ValueError("alpha must be in (0,1).")
 
-    p = np.asarray(list(pvals), dtype=float)
+    p = np.asarray(pvals, dtype=float)
     if p.ndim != 1:
         raise ValueError("pvals must be 1D.")
+
     m = int(p.size)
     if m == 0:
-        return ([], np.asarray([], dtype=float))
+        return np.asarray([], dtype=bool)
 
-    # clamp p into [0,1]
     p = np.clip(p, 0.0, 1.0)
+    order = np.argsort(p)
+    p_sorted = p[order]
+    ranks = np.arange(1, m + 1, dtype=float)
+
+    thresh = (float(alpha) * ranks) / float(m)
+    passed = p_sorted <= thresh
+
+    reject_sorted = np.zeros(m, dtype=bool)
+    if np.any(passed):
+        kmax = int(np.max(np.where(passed)[0]))
+        cutoff = float(p_sorted[kmax])
+        reject_sorted = p_sorted <= cutoff
+
+    reject = np.zeros(m, dtype=bool)
+    reject[order] = reject_sorted
+    return reject.astype(bool)
+
+
+def _bh_qvalues(pvals: np.ndarray) -> np.ndarray:
+    """
+    BH-adjusted q-values (not part of the public test API, but used by detect_spectral_artifacts).
+    """
+    p = np.asarray(pvals, dtype=float)
+    p = np.clip(p, 0.0, 1.0)
+    m = int(p.size)
+    if m == 0:
+        return np.asarray([], dtype=float)
 
     order = np.argsort(p)
     p_sorted = p[order]
     ranks = np.arange(1, m + 1, dtype=float)
 
-    # BH threshold line
-    thresh = (float(alpha) * ranks) / float(m)
-
-    # Find largest k where p_k <= (k/m)*alpha
-    passed = p_sorted <= thresh
-    if np.any(passed):
-        kmax = int(np.max(np.where(passed)[0]))
-        cutoff = float(p_sorted[kmax])
-        reject_sorted = p_sorted <= cutoff
-    else:
-        reject_sorted = np.zeros(m, dtype=bool)
-
-    # q-values: p_i * m / rank_i, then enforce monotonicity from the end
     q_sorted = (p_sorted * float(m)) / ranks
     q_sorted = np.minimum.accumulate(q_sorted[::-1])[::-1]
     q_sorted = np.clip(q_sorted, 0.0, 1.0)
 
-    # return to original order
-    reject = np.zeros(m, dtype=bool)
-    qvals = np.zeros(m, dtype=float)
-    reject[order] = reject_sorted
-    qvals[order] = q_sorted
-
-    # IMPORTANT: list of python bools (not np.bool_)
-    return ([bool(x) for x in reject.tolist()], qvals)
+    q = np.zeros(m, dtype=float)
+    q[order] = q_sorted
+    return q
 
 
 def power_two_sample_normal(
-    effect: float,
-    n_per_group: int,
     *,
+    effect_size: float,
+    n: int,
     alpha: float = 0.05,
     two_sided: bool = True,
 ) -> float:
     """
-    Power for a two-sample z-test for difference in means, assuming:
-      - equal variance,
-      - known/normalized sigma = 1,
-      - effect = (mu1 - mu2) / sigma.
+    Power for a two-sample z-test, sigma normalized to 1.
 
-    Standard error for difference: sqrt(2/n).
-    Under H1: Z ~ N(effect / se, 1).
-
-    Returns power in [0,1].
+    Tests call:
+      power_two_sample_normal(effect_size=..., alpha=..., n=..., two_sided=...)
     """
-    n = int(n_per_group)
-    if n <= 0:
-        raise ValueError("n_per_group must be > 0.")
+    nn = int(n)
+    if nn <= 0:
+        raise ValueError("n must be > 0.")
     if not (0.0 < float(alpha) < 1.0):
         raise ValueError("alpha must be in (0,1).")
 
-    se = np.sqrt(2.0 / float(n))
-    mu = float(effect) / float(se)
+    se = np.sqrt(2.0 / float(nn))
+    mu = float(effect_size) / float(se)
 
     if two_sided:
         zcrit = float(norm.isf(float(alpha) / 2.0))
-        # Power = P(|Z| >= zcrit | Z ~ N(mu,1))
         power = float(norm.sf(zcrit - mu) + norm.cdf(-zcrit - mu))
     else:
         zcrit = float(norm.isf(float(alpha)))
         power = float(norm.sf(zcrit - mu))
 
-    # clamp
-    if power < 0.0:
-        return 0.0
-    if power > 1.0:
-        return 1.0
-    return float(power)
+    return float(np.clip(power, 0.0, 1.0))
 
 
 @dataclass(frozen=True)
@@ -212,69 +223,63 @@ class DetectionResult:
     z_obs: np.ndarray
     pvals: np.ndarray
     qvals: np.ndarray
-    reject: list[bool]
+    reject: np.ndarray
     null_z: np.ndarray
 
 
-def _null_surrogates(
-    x: np.ndarray,
-    n_null: int,
-    null_model: NullModel,
-    seed: int,
-) -> np.ndarray:
+def _null_surrogates(x: np.ndarray, n_null: int, null_model: NullModel, seed: int) -> np.ndarray:
     rng = np.random.default_rng(int(seed))
     x = np.asarray(x, dtype=float)
 
-    if n_null <= 0:
+    if int(n_null) <= 0:
         raise ValueError("n_null must be > 0.")
 
-    if null_model == NullModel.GAUSSIAN:
+    if null_model.kind == "gaussian":
         mu = float(np.mean(x))
         sd = float(np.std(x, ddof=1)) if x.size > 1 else 0.0
         if sd <= 0.0:
-            return np.tile(np.full_like(x, mu, dtype=float), (n_null, 1))
-        return rng.normal(loc=mu, scale=sd, size=(n_null, x.size)).astype(float)
+            return np.tile(np.full_like(x, mu, dtype=float), (int(n_null), 1))
+        return rng.normal(loc=mu, scale=sd, size=(int(n_null), x.size)).astype(float)
 
-    if null_model == NullModel.PHASE_RANDOMIZED:
+    if null_model.kind == "phase_randomized":
         x_fft = np.fft.rfft(x)
         mag = np.abs(x_fft)
-        out = np.zeros((n_null, x.size), dtype=float)
-        for i in range(n_null):
+        out = np.zeros((int(n_null), x.size), dtype=float)
+
+        for i in range(int(n_null)):
             phase = rng.uniform(0.0, 2.0 * np.pi, size=mag.size)
             phase[0] = 0.0
             if mag.size > 1:
                 phase[-1] = 0.0
             x_null_fft = mag * np.exp(1j * phase)
             out[i, :] = np.fft.irfft(x_null_fft, n=x.size)
+
         return out
 
-    raise ValueError(f"Unknown null_model: {null_model!r}")
+    raise ValueError(f"Unknown null model kind: {null_model.kind!r}")
 
 
 def detect_spectral_artifacts(
     x: np.ndarray,
     freq_indices: Iterable[int] | None = None,
     *,
-    null_model: NullModel = NullModel.PHASE_RANDOMIZED,
+    null_model: NullModel | None = None,
     n_null: int = 256,
     alpha: float = 0.05,
     seed: int = 0,
 ) -> DetectionResult:
     """
-    Detect candidate spectral artifacts with:
-      - a chosen null model,
-      - empirical p-values (one-sided 'greater'),
-      - BH-FDR control.
+    Orchestrator: null model -> empirical p-values -> BH reject mask (+ q-values).
 
-    Returns DetectionResult.
+    Tests require it to run with:
+      nm = NullModel(kind="phase_randomized")
+      detect_spectral_artifacts(x, null_model=nm, ...)
     """
     x = np.asarray(x, dtype=float)
-    if x.ndim != 1:
-        raise ValueError("x must be a 1D array.")
-    if x.size < 8:
-        raise ValueError("x must have at least 8 samples.")
-    if not (0.0 < float(alpha) < 1.0):
-        raise ValueError("alpha must be in (0,1).")
+    if x.ndim != 1 or x.size < 8:
+        raise ValueError("x must be 1D with length >= 8.")
+
+    nm = null_model if null_model is not None else NullModel(kind="phase_randomized")
 
     if freq_indices is None:
         n_bins = np.fft.rfft(x).size
@@ -291,7 +296,7 @@ def detect_spectral_artifacts(
 
     z_obs = np.asarray([spectral_peak_zscore(x, int(i)) for i in idxs], dtype=float)
 
-    sur = _null_surrogates(x=x, n_null=int(n_null), null_model=null_model, seed=int(seed))
+    sur = _null_surrogates(x=x, n_null=int(n_null), null_model=nm, seed=int(seed))
     null_z = np.zeros((idxs.size, int(n_null)), dtype=float)
 
     for j in range(int(n_null)):
@@ -305,7 +310,9 @@ def detect_spectral_artifacts(
         dtype=float,
     )
 
-    reject, qvals = benjamini_hochberg(pvals, alpha=float(alpha))
+    reject = benjamini_hochberg(pvals, alpha=float(alpha))
+    qvals = _bh_qvalues(pvals)
+
     return DetectionResult(
         idxs=idxs,
         z_obs=z_obs,
