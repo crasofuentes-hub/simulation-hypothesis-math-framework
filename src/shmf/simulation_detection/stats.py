@@ -1,15 +1,24 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import Enum
+
+import numpy as np
+
 
 class NullModel(str, Enum):
     """
     Null models used for artifact detection.
 
-    - GAUSSIAN: i.i.d. Gaussian with same mean/std as the observed series (simple baseline).
-    - PHASE_RANDOMIZED: preserves the rFFT magnitude spectrum, randomizes phases (stationary surrogate).
+    - GAUSSIAN: i.i.d. Gaussian with the same mean/std as the observed series.
+    - PHASE_RANDOMIZED: preserves the rFFT magnitude spectrum and randomizes phases
+      (stationary surrogate).
     """
+
     GAUSSIAN = "gaussian"
     PHASE_RANDOMIZED = "phase_randomized"
+
 def _clamp01(p: float) -> float:
     # Numerical safety: keep within [0,1]
     if p < 0.0:
@@ -17,12 +26,6 @@ def _clamp01(p: float) -> float:
     if p > 1.0:
         return 1.0
     return float(p)
-from collections.abc import Iterable
-from dataclasses import dataclass
-from enum import Enum
-import numpy as np
-from scipy.special import erfc, erfcinv
-from scipy.stats import norm
 
 
 def spectral_peak_zscore(x: np.ndarray, freq_index: int | None = None) -> float:
@@ -151,7 +154,7 @@ def empirical_p_value(
 
 def bh_fdr(pvals: Iterable[float], alpha: float = 0.05) -> tuple[np.ndarray, np.ndarray]:
     """
-    BenjaminiÃ¢â‚¬â€œHochberg FDR procedure.
+    BenjaminiÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“Hochberg FDR procedure.
 
     Returns
     -------
