@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
@@ -22,13 +22,10 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.ruff]
+line-length = 100
+target-version = "py310"
 
 [tool.ruff.lint]
 ignore = ["E203"]
 select = ["E","F","I","B","UP","N"]
-line-length = 100
-target-version = "py310"
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-addopts = "-q"
